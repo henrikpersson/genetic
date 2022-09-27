@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<body>
+    <canvas id="c" width="800" height="600" style="border: 1px solid black;"></canvas>
+    <br />
+    generation: <span id="gen"></span>
+    population: <span id="pop"></span>
+</body>
+
+<script>
+const GENES_PER_CHROMOSOME = 11; // 11 bits = good enough representation for 800x600 pixels
+const NUM_CHROMOSOMES = 2; // x, y
+const DNA_LENGTH = GENES_PER_CHROMOSOME * NUM_CHROMOSOMES;
+
+const SELECTION_LIMIT = 2; // has to be an even num
+const INITIAL_POPULATION = 1000;
+const GEN_LIFETIME_MS = 10;
+
+const CROSSOVER_ENABLED = true;
+const RANDOM_SELECTION = false;
+
+// range: 0-100
+const MUTATE_INDIVIDUAL_CHANCE = 30;
+const MUTATE_GENE_CHANCE = 50;
+
+const random = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+const average = arr => arr.reduce(( p, c ) => p + c, 0) / arr.length;
+
+let target = [400, 300]; // center
+let idCounter = 0;
+
+const decodeGenes = (genes) => {
+    return [...genes].reverse().reduce((a, b) => a + b);
+}
+
+const encodeGenes = (chromosome) => {
+    return Array(DNA_LENGTH).fill(0).map((_, i) => chromosome[DNA_LENGTH - 1 - i]);
+}
+
+const encodeChromosome = (payloads) => {
+    return payloads
+        .reduce((acc, payload) => payload.toString(2)
+        .padStart(GENES_PER_CHROMOSOME, '0') + acc, '');
+}
+
+const decodeChromosome = (chromosome) => {
+    let dataStart = 0;
+    let data = [];
+    for (let i = 0; i < NUM_CHROMOSOMES; i++) {
+        const dataStr = chromosome.substring(dataStart, dataStart + GENES_PER_CHROMOSOME);
+        data.push(parseInt(dataStr, 2));
+        dataStart += GENES_PER_CHROMOSOME;
+    }
+    return data.reverse();
+}
+
+const createIndividual = (x, y, color) => {
+    return {
+        color,
+        fitness: 0,
+        genes: encodeGenes(encodeChromosome([x, y])),
+        id: idCounter++,
+        calcFitness() {
+            const pos = decodeChromosome(decodeGenes(this.genes));
+            // * -1 bc distance is bad
+            this.fitness = -1 * Math.sqrt(Math.pow(pos[0] - target[0], 2) + Math.pow(pos[1] - target[1], 2));
+        },
+    }
+}
+
+const createPopulation = (num) => {
+    let individuals = Array(num).fill().map((_, id) => {
+        let y = random(0, canvas.height);
+        let x = random(0, canvas.width);
+        return createIndividual(x, y, '#000000');
+    });
+
+    return {
+        individuals,
+        loop(func) {
+            this.individuals.forEach(indiv => {
+                func(indiv);
+            });
+        },
+        calcFitness() {
+            this.loop(indiv => {
+                indiv.calcFitness();
+            });
+        },
+        selection() {
+            const parentPairs = [];
+            let tmp = [...this.individuals];
+            if (RANDOM_SELECTION) {
+                for (let i = 0; i < SELECTION_LIMIT; i++) {
+                    parentPairs.push([tmp[random(0, tmp.length - 1)], tmp[random(0, tmp.length - 1)]]);
+                }
+            } else {
+                for (let i = 0; i < SELECTION_LIMIT; i++) {
+                    // TODO: make better, this ufgly as fuck
+                    let first = tmp.reduce((a, b) => (a.fitness > b.fitness) ? a : b);
+                    tmp = tmp.filter(a => a != first);
+                    let second = tmp.reduce((a, b) => (a.fitness > b.fitness) ? a : b);
+                    tmp = tmp.filter(a => a != second);
+                    parentPairs.push([first, second])
+                }
+            }
+            return parentPairs;
+        },
+        createOffspring(arrayOfParentPairs) {
+            for (let p = 0; p < arrayOfParentPairs.length; p++) {
+                const parent1 = arrayOfParentPairs[p][0];
+                const parent2 = arrayOfParentPairs[p][1];                
+                const offspringGenes1 = [...parent1.genes];
+                const offspringGenes2 = [...parent2.genes];
+
+                // console.log('p1', decodeChromosome(decodeGenes(parent1.genes)));
+                // console.log('p2', decodeChromosome(decodeGenes(parent2.genes)));
+
+                //iterate each data point in the chromosome
+                if (CROSSOVER_ENABLED) {
+                    for (let i = 0; i < NUM_CHROMOSOMES; i++) {
+                        // choose a crossover point for each data point
+                        const crossoverPoint = random(1, GENES_PER_CHROMOSOME - 1);
+                        for (let j = 0; j < crossoverPoint; j++) {
+                            const dataIndex = i * GENES_PER_CHROMOSOME;
+                            offspringGenes1[dataIndex+j] = parent2.genes[dataIndex+j];
+                            offspringGenes2[dataIndex+j] = parent1.genes[dataIndex+j];
+                        }
+                    }
+                }
+
+                // console.log('o1', decodeChromosome(decodeGenes(offspringGenes1)));
+                // console.log('o2', decodeChromosome(decodeGenes(offspringGenes2)));
+                mutate(offspringGenes1);
+                mutate(offspringGenes2);
+
+                const pos1 = decodeChromosome(decodeGenes(offspringGenes1));
+                const pos2 = decodeChromosome(decodeGenes(offspringGenes2));
+                this.individuals.push(createIndividual(pos1[0], pos1[1], '#FF0000'));
+                this.individuals.push(createIndividual(pos2[0], pos2[1], '#0000FF'));
+
+                // this.individuals = this.individuals.filter(a => a != parent1);
+                // this.individuals = this.individuals.filter(a => a != parent2);
+            }
+        },
+        killWeakest(num) {
+            for(let i = 0; i < num; i++) {
+                let weak = this.individuals.reduce((a, b) => (a.fitness > b.fitness) ? b : a);
+                // console.log("killed", weak);
+                this.individuals = this.individuals.filter(a => a != weak);
+            }
+        },
+        print() {
+            this.loop(indiv => {
+                console.log(`id: ${indiv.id}, fitness: ${indiv.fitness}, genes: ${indiv.genes}`);
+            });
+        },
+        fitness() {
+            return this.individuals.map(indiv => indiv.fitness);
+        }
+    }
+}
+
+const mutate = (genes) => {
+    const shouldMutate = random(1, 100);
+    if (shouldMutate < MUTATE_INDIVIDUAL_CHANCE) {
+        for (let i = 0; i < genes.length - 1; i++) {
+            let shouldMutateGene = random(0, 100);
+            if (shouldMutateGene < MUTATE_GENE_CHANCE) {
+                // genes[i] = genes[i] == 0 ? 1 : 0;
+                genes[i] = random(0, 1);
+            }
+        }
+    }
+}
+
+const draw = (gen, population, ctx) => {
+    ctx.clearRect(0, 0, 800, 600);
+    // console.log("----- draw ----");
+    population.individuals.forEach(indiv => {
+        // console.log("id", indiv.id, "x", indiv.x, "y", indiv.y);
+        const pos = decodeChromosome(decodeGenes(indiv.genes));
+        ctx.fillStyle = indiv.color;
+        // console.log('drawing at', pos[0], pos[1]);
+        ctx.fillRect(pos[0], pos[1], 10, 10);
+    });
+
+    ctx.fillStyle = 'orange';
+    ctx.fillRect(target[0], target[1], 10, 10);
+
+    document.querySelector("#gen").innerHTML = gen;
+    document.querySelector("#pop").innerHTML = population.individuals.length;
+}
+
+let canvas = document.querySelector("#c");
+let ctx = canvas.getContext("2d");
+let population = createPopulation(INITIAL_POPULATION);
+population.calcFitness();
+draw(gen, population, ctx);
+
+let generation = 0;
+let timer = setInterval(() => {
+    generation++;
+    let parents = population.selection();
+    population.killWeakest(SELECTION_LIMIT * 2);
+    population.createOffspring(parents);
+    population.calcFitness();
+    draw(generation, population, ctx);
+}, GEN_LIFETIME_MS);
+
+canvas.addEventListener('click', (ev) => {
+    const x = ev.pageX - (canvas.offsetLeft + canvas.clientLeft);
+    const y = ev.pageY - (canvas.offsetTop + canvas.clientTop);
+    target = [x ,y];
+});
+
+</script>
